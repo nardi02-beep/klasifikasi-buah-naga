@@ -1,13 +1,13 @@
 """
-🔴 AUTO-CAPTURE V4 - STREAMLIT WEBRTC VERSION
-OPTIMIZED for RED Dragon Fruit Detection with Real-Time Camera
+🔴 Dragon Fruit Scanner - STREAMLIT CAMERA INPUT VERSION
+Simplified version without WebRTC for better cloud compatibility
 
 Key Features:
-1. ✅ Real-time video processing (like cv2.VideoCapture)
-2. ✅ Enhanced RED color detection (dark, bright, pink)
-3. ✅ Brightness normalization
-4. ✅ Auto-capture with validation
-5. ✅ Streamlit UI for easy deployment
+1. ✅ Camera input (foto langsung dari kamera)
+2. ✅ Upload file support
+3. ✅ Enhanced RED color detection
+4. ✅ Auto-save captures
+5. ✅ No WebRTC dependency
 """
 
 import streamlit as st
@@ -15,16 +15,14 @@ import cv2
 import numpy as np
 import joblib
 from scipy.stats import skew
-from collections import deque
 import time
 import os
 from datetime import datetime
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
-import av
+from PIL import Image
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(
-    page_title="Dragon Fruit Scanner V4",
+    page_title="Dragon Fruit Scanner",
     page_icon="🔴",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -53,34 +51,23 @@ def load_model():
 
 model, classes = load_model()
 
-# ---------- 2. CONFIGURATION (OPTIMIZED FOR REAL FRUIT) ----------
+# ---------- 2. CONFIGURATION ----------
 TARGET_SIZE = (800, 800)
-ROI_SIZE = 350
-
-# 🔴 OPTIMIZED FOR RED DRAGON FRUIT
-MIN_DRAGON_FRUIT_AREA = 12.0        # 12% (turun dari 20%) - akomodasi refleksi
-MIN_VARIANCE = 150                   # Very lenient - glossy surface OK
-MIN_EDGE_DENSITY = 0.015             # Very lenient - smooth surface OK
-MAX_VARIANCE = 2000                  # Reject screen/display (texture terlalu tinggi)
+MIN_DRAGON_FRUIT_AREA = 12.0
+MIN_VARIANCE = 150
+MIN_EDGE_DENSITY = 0.015
+MAX_VARIANCE = 2000
 
 BASE_CAPTURE_DIR = "auto_captures"
 os.makedirs(BASE_CAPTURE_DIR, exist_ok=True)
 
-# Session state for video processor
-if 'prediction_buffer' not in st.session_state:
-    st.session_state.prediction_buffer = deque(maxlen=7)
+# Session state
 if 'capture_history' not in st.session_state:
-    st.session_state.capture_history = deque(maxlen=10)
-if 'last_capture_time' not in st.session_state:
-    st.session_state.last_capture_time = 0
+    st.session_state.capture_history = []
 if 'confidence_threshold' not in st.session_state:
     st.session_state.confidence_threshold = 65.0
-if 'capture_cooldown' not in st.session_state:
-    st.session_state.capture_cooldown = 3.0
-if 'frame_count' not in st.session_state:
-    st.session_state.frame_count = 0
-if 'total_captures' not in st.session_state:
-    st.session_state.total_captures = 0
+if 'total_scans' not in st.session_state:
+    st.session_state.total_scans = 0
 
 # ---------- 3. HELPER FUNCTIONS ----------
 def bgr_to_hsi(bgr_image):
@@ -128,7 +115,7 @@ def extract_color_features(bgr_img):
 
 # ---------- 4. PREDICTION ----------
 def predict_maturity(roi):
-    """Predict with smoothing using session state"""
+    """Predict maturity with confidence"""
     try:
         features = extract_color_features(roi)
         label = model.predict([features])[0]
@@ -150,58 +137,31 @@ def predict_maturity(roi):
             confidence = 100.0
             class_probs = {label: 100.0}
         
-        st.session_state.prediction_buffer.append((label, confidence))
-        
-        labels = [pred[0] for pred in st.session_state.prediction_buffer]
-        from collections import Counter
-        label_counts = Counter(labels)
-        smoothed_label = label_counts.most_common(1)[0][0]
-        
-        confidences = [pred[1] for pred in st.session_state.prediction_buffer if pred[0] == smoothed_label]
-        smoothed_confidence = np.mean(confidences) if confidences else confidence
-        
-        return smoothed_label, smoothed_confidence, features, class_probs
+        return label, confidence, class_probs
     except Exception as e:
-        return "ERROR", 0.0, None, {}
+        return "ERROR", 0.0, {}
 
-# ---------- 5. 🔴 ENHANCED RED DRAGON FRUIT COLOR DETECTION ----------
+# ---------- 5. COLOR DETECTION ----------
 def is_dragon_fruit_color(roi):
-    """
-    🔴 OPTIMIZED untuk buah naga merah ASLI
-    
-    Covers:
-    - Dark red (mature): H=0-10, 170-180, S=20-100, V=30-90
-    - Bright red (ripe): H=0-15, 165-180, S=30-100, V=70-255
-    - Pink (immature): H=340-360, S=20-80, V=60-200
-    
-    Returns: (is_dragon_fruit, color_type, percentage, debug_info)
-    """
-    # Brightness normalization untuk consistent detection
+    """Enhanced red dragon fruit color detection"""
+    # Brightness normalization
     lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
     l, a, b_ch = cv2.split(lab)
-    l = cv2.equalizeHist(l)  # Normalize luminance
+    l = cv2.equalizeHist(l)
     lab_normalized = cv2.merge([l, a, b_ch])
     roi_normalized = cv2.cvtColor(lab_normalized, cv2.COLOR_LAB2BGR)
     
-    # Convert to HSV
     hsv = cv2.cvtColor(roi_normalized, cv2.COLOR_BGR2HSV)
     
-    # 🔴 RED COLOR RANGES (EXPANDED!)
-    
-    # Dark Red (mature dragon fruit) - merah gelap
-    # H: 0-10 & 170-180 (red wrap), S: 20-100 (akomodasi glossy), V: 30-90 (dark)
+    # Red color ranges
     mask_dark_red1 = cv2.inRange(hsv, np.array([0, 20, 30]), np.array([10, 100, 90]))
     mask_dark_red2 = cv2.inRange(hsv, np.array([170, 20, 30]), np.array([180, 100, 90]))
     mask_dark_red = cv2.bitwise_or(mask_dark_red1, mask_dark_red2)
     
-    # Bright Red (ripe dragon fruit) - merah cerah
-    # H: 0-15 & 165-180, S: 30-100, V: 70-255 (bright)
     mask_bright_red1 = cv2.inRange(hsv, np.array([0, 30, 70]), np.array([15, 100, 255]))
     mask_bright_red2 = cv2.inRange(hsv, np.array([165, 30, 70]), np.array([180, 100, 255]))
     mask_bright_red = cv2.bitwise_or(mask_bright_red1, mask_bright_red2)
     
-    # Pink/Light Red (less mature) - merah muda
-    # H: 0-5 & 175-180, S: 15-60, V: 80-255
     mask_pink1 = cv2.inRange(hsv, np.array([0, 15, 80]), np.array([5, 60, 255]))
     mask_pink2 = cv2.inRange(hsv, np.array([175, 15, 80]), np.array([180, 60, 255]))
     mask_pink = cv2.bitwise_or(mask_pink1, mask_pink2)
@@ -212,34 +172,21 @@ def is_dragon_fruit_color(roi):
     bright_red_percent = (np.sum(mask_bright_red > 0) / total_pixels) * 100
     pink_percent = (np.sum(mask_pink > 0) / total_pixels) * 100
     
-    # Combine all red masks
     mask_all_red = cv2.bitwise_or(mask_dark_red, mask_bright_red)
     mask_all_red = cv2.bitwise_or(mask_all_red, mask_pink)
     total_red_percent = (np.sum(mask_all_red > 0) / total_pixels) * 100
     
-    # Also check for yellow/green (untuk buah naga kuning/putih)
+    # Yellow/green for other dragon fruit types
     mask_yellow = cv2.inRange(hsv, np.array([20, 30, 60]), np.array([40, 255, 255]))
     mask_green = cv2.inRange(hsv, np.array([40, 20, 40]), np.array([80, 180, 220]))
     
     yellow_percent = (np.sum(mask_yellow > 0) / total_pixels) * 100
     green_percent = (np.sum(mask_green > 0) / total_pixels) * 100
     
-    # Total dragon fruit color (red + yellow + green)
     mask_dragon_fruit = cv2.bitwise_or(mask_all_red, mask_yellow)
     mask_dragon_fruit = cv2.bitwise_or(mask_dragon_fruit, mask_green)
     dragon_fruit_percent = (np.sum(mask_dragon_fruit > 0) / total_pixels) * 100
     
-    # Determine color type
-    color_percentages = {
-        'Dark Red': dark_red_percent,
-        'Bright Red': bright_red_percent,
-        'Pink': pink_percent,
-        'Yellow': yellow_percent,
-        'Green': green_percent
-    }
-    dominant_color = max(color_percentages, key=color_percentages.get)
-    
-    # 🎯 VALIDATION: Minimal 12% (turun dari 20%)
     is_dragon_fruit = dragon_fruit_percent >= MIN_DRAGON_FRUIT_AREA
     
     debug_info = {
@@ -252,215 +199,122 @@ def is_dragon_fruit_color(roi):
         'total': dragon_fruit_percent
     }
     
-    return is_dragon_fruit, dominant_color, dragon_fruit_percent, debug_info
+    return is_dragon_fruit, dragon_fruit_percent, debug_info
 
-# ---------- 6. OBJECT DETECTION (VERY LENIENT + REJECT SCREEN) ----------
+# ---------- 6. OBJECT DETECTION ----------
 def is_object_present(roi):
-    """
-    Object detection dengan:
-    - Very lenient threshold (buah asli OK)
-    - Reject screen/display (variance terlalu tinggi)
-    """
+    """Object detection with screen rejection"""
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     variance = np.var(gray)
     
     edges = cv2.Canny(gray, 50, 150)
     edge_density = np.sum(edges > 0) / edges.size
     
-    # Check variance range
     has_variance_ok = MIN_VARIANCE < variance < MAX_VARIANCE
     has_edges_ok = edge_density > MIN_EDGE_DENSITY
-    
-    # Reject if variance TOO HIGH (likely screen/display)
     is_screen = variance > MAX_VARIANCE
     
     is_valid_object = has_variance_ok and has_edges_ok and not is_screen
     
     return is_valid_object, variance, edge_density, is_screen
 
-# ---------- 7. VISUAL HELPERS ----------
-def get_color_by_status(color_valid, confidence, is_screen):
-    """ROI box color using session state"""
-    confidence_threshold = st.session_state.confidence_threshold
-    
-    if is_screen:
-        return (0, 0, 255)        # Red - screen detected
-    elif not color_valid:
-        return (100, 100, 100)    # Gray - not dragon fruit
-    elif confidence >= confidence_threshold:
-        return (0, 255, 0)        # Green - ready
+# ---------- 7. IMAGE PROCESSING ----------
+def process_image(image):
+    """Process uploaded/captured image"""
+    # Convert PIL to OpenCV
+    if isinstance(image, Image.Image):
+        img = np.array(image)
+        if img.shape[2] == 4:  # RGBA
+            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
+        elif img.shape[2] == 3:  # RGB
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     else:
-        return (0, 255, 255)      # Yellow - low confidence
-
-# ---------- 8. VIDEO PROCESSOR CLASS ----------
-class DragonFruitDetector(VideoProcessorBase):
-    """Real-time video processor for Dragon Fruit Detection"""
+        img = image
     
-    def __init__(self):
-        self.prev_frame = None
-        self.frame_count = 0
-        
-    def recv(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        
-        st.session_state.frame_count += 1
-        h, w = img.shape[:2]
-        
-        # ROI
-        size = ROI_SIZE
-        x1, y1 = (w - size) // 2, (h - size) // 2
-        x2, y2 = x1 + size, y1 + size
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w, x2), min(h, y2)
-        
-        roi = img[y1:y2, x1:x2]
-        if roi.size == 0:
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
-        
-        # Layer 1: Object detection
-        obj_present, variance, edge_density, is_screen = is_object_present(roi)
-        obj_info = (obj_present, variance, edge_density, is_screen)
-        
-        # Default values
-        label, confidence, class_probs = "WAITING", 0.0, {}
-        color_valid = False
-        color_info = {'dark_red': 0, 'bright_red': 0, 'pink': 0, 'yellow': 0, 
-                     'green': 0, 'total_red': 0, 'total': 0}
-        
-        # Layer 2: Color validation
-        if obj_present and not is_screen:
-            color_valid, dominant_color, color_percent, debug_info = is_dragon_fruit_color(roi)
-            color_info = debug_info
-            color_info['dominant'] = dominant_color
-            
-            # Layer 3: Prediction (process every frame for real-time)
-            if color_valid:
-                label, confidence, _, class_probs = predict_maturity(roi)
-                
-                # Auto-capture with session state
-                captured, status = auto_capture_streamlit(
-                    roi, label, confidence, class_probs, 
-                    color_valid, color_percent, is_screen
-                )
-                
-                if captured:
-                    # Flash effect
-                    flash = np.ones_like(img) * 255
-                    img = cv2.addWeighted(img, 0.6, flash, 0.4, 0)
-        else:
-            if is_screen:
-                label = "SCREEN DETECTED"
-            else:
-                label = "NO OBJECT"
-        
-        # Draw ROI box
-        box_color = get_color_by_status(color_valid, confidence, is_screen)
-        confidence_threshold = st.session_state.confidence_threshold
-        thickness = 4 if (color_valid and confidence >= confidence_threshold and not is_screen) else 2
-        cv2.rectangle(img, (x1, y1), (x2, y2), box_color, thickness)
-        
-        center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
-        cv2.drawMarker(img, (center_x, center_y), box_color, cv2.MARKER_CROSS, 30, 3)
-        
-        # Status text above ROI
-        if is_screen:
-            status_text = "SCREEN/DISPLAY - REJECTED"
-            status_color = (0, 0, 255)
-        elif not obj_present:
-            status_text = "WAITING FOR OBJECT"
-            status_color = (100, 100, 100)
-        elif not color_valid:
-            status_text = f"NOT DRAGON FRUIT ({color_info['total']:.1f}%)"
-            status_color = (0, 100, 255)
-        elif confidence < confidence_threshold:
-            status_text = f"LOW CONF ({confidence:.1f}%)"
-            status_color = (0, 255, 255)
-        else:
-            status_text = "READY!"
-            status_color = (0, 255, 0)
-        
-        # Draw status text
-        text_y = max(y1 - 10, 30)
-        cv2.putText(img, status_text, (x1, text_y), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
-        
-        # Draw compact info overlay
-        if color_valid or obj_present:
-            self.draw_compact_info(img, label, confidence, class_probs, 
-                                  color_valid, color_info, obj_info)
-        
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+    h, w = img.shape[:2]
     
-    def draw_compact_info(self, frame, label, confidence, class_probs, 
-                         color_valid, color_info, obj_info):
-        """Compact info overlay"""
-        h, w = frame.shape[:2]
-        
-        # Semi-transparent black box
-        overlay = frame.copy()
-        cv2.rectangle(overlay, (10, 10), (400, 180), (0, 0, 0), -1)
-        frame[:] = cv2.addWeighted(overlay, 0.7, frame, 0.3, 0)
-        
-        y = 30
-        
-        # Object Detection
-        obj_present, variance, edge_density, is_screen = obj_info
-        status = "SCREEN" if is_screen else ("OK" if obj_present else "FAIL")
-        color = (0, 0, 255) if (is_screen or not obj_present) else (0, 255, 0)
-        cv2.putText(frame, f"Object: {status} (Var:{variance:.0f})", 
-                   (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        y += 30
-        
-        # Color Detection
-        status = "OK" if color_valid else "FAIL"
-        color = (0, 255, 0) if color_valid else (0, 0, 255)
-        cv2.putText(frame, f"Color: {status} ({color_info['total']:.1f}%)", 
-                   (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        y += 25
-        cv2.putText(frame, f"  R:{color_info['total_red']:.0f}% P:{color_info['pink']:.0f}%", 
-                   (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (180, 180, 180), 1)
-        y += 30
-        
-        # Prediction
-        conf_threshold = st.session_state.confidence_threshold
-        status = "OK" if confidence >= conf_threshold else "LOW"
-        color = (0, 255, 0) if confidence >= conf_threshold else (0, 165, 255)
-        cv2.putText(frame, f"Predict: {label} ({confidence:.1f}%)", 
-                   (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-        y += 30
-        
-        # Result
-        all_pass = obj_present and not is_screen and color_valid and confidence >= conf_threshold
-        result = "READY TO CAPTURE" if all_pass else "Validating..."
-        result_color = (0, 255, 0) if all_pass else (100, 100, 100)
-        cv2.putText(frame, result, 
-                   (20, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, result_color, 2)
-
-# ---------- 9. AUTO-CAPTURE FOR STREAMLIT ----------
-def auto_capture_streamlit(roi, label, confidence, class_probs, color_valid, color_percent, is_screen):
-    """Auto capture with Streamlit session state"""
-    current_time = time.time()
-    time_since_last = current_time - st.session_state.last_capture_time
-    confidence_threshold = st.session_state.confidence_threshold
-    capture_cooldown = st.session_state.capture_cooldown
+    # Crop to center square
+    size = min(h, w)
+    x1 = (w - size) // 2
+    y1 = (h - size) // 2
+    roi = img[y1:y1+size, x1:x1+size]
     
-    # Reject screen/display
+    # Validate
+    obj_present, variance, edge_density, is_screen = is_object_present(roi)
+    color_valid, color_percent, color_info = is_dragon_fruit_color(roi)
+    
+    result = {
+        'roi': roi,
+        'obj_present': obj_present,
+        'variance': variance,
+        'edge_density': edge_density,
+        'is_screen': is_screen,
+        'color_valid': color_valid,
+        'color_percent': color_percent,
+        'color_info': color_info,
+        'annotated': None,
+        'label': None,
+        'confidence': 0.0,
+        'class_probs': {}
+    }
+    
+    # Create annotated image
+    annotated = img.copy()
+    x2, y2 = x1 + size, y1 + size
+    
+    # Determine status
     if is_screen:
-        return False, "Screen detected"
+        box_color = (0, 0, 255)  # Red
+        status_text = "SCREEN/DISPLAY - REJECTED"
+        status_color = (0, 0, 255)
+    elif not obj_present:
+        box_color = (100, 100, 100)  # Gray
+        status_text = "NO VALID OBJECT"
+        status_color = (100, 100, 100)
+    elif not color_valid:
+        box_color = (0, 100, 255)  # Orange
+        status_text = f"NOT DRAGON FRUIT ({color_percent:.1f}%)"
+        status_color = (0, 100, 255)
+    else:
+        # Predict
+        label, confidence, class_probs = predict_maturity(roi)
+        result['label'] = label
+        result['confidence'] = confidence
+        result['class_probs'] = class_probs
+        
+        conf_threshold = st.session_state.confidence_threshold
+        if confidence >= conf_threshold:
+            box_color = (0, 255, 0)  # Green
+            status_text = f"✓ {label} ({confidence:.1f}%)"
+            status_color = (0, 255, 0)
+        else:
+            box_color = (0, 255, 255)  # Yellow
+            status_text = f"LOW CONF: {label} ({confidence:.1f}%)"
+            status_color = (0, 255, 255)
     
-    # Color validation
-    if not color_valid:
-        return False, f"Color: {color_percent:.1f}%"
+    # Draw box and text
+    cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 3)
     
-    # Confidence check
-    if confidence < confidence_threshold:
-        return False, f"Low confidence: {confidence:.1f}%"
+    # Status text
+    text_size = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+    text_x = x1
+    text_y = max(y1 - 10, text_size[1] + 10)
     
-    # Cooldown
-    if time_since_last < capture_cooldown:
-        return False, f"Cooldown: {capture_cooldown - time_since_last:.1f}s"
+    # Background for text
+    cv2.rectangle(annotated, 
+                 (text_x - 5, text_y - text_size[1] - 5),
+                 (text_x + text_size[0] + 5, text_y + 5),
+                 (0, 0, 0), -1)
+    cv2.putText(annotated, status_text, (text_x, text_y),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
     
-    # CAPTURE!
+    result['annotated'] = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
+    
+    return result
+
+# ---------- 8. SAVE CAPTURE ----------
+def save_capture(roi, label, confidence):
+    """Save captured image"""
     class_dir = os.path.join(BASE_CAPTURE_DIR, label)
     os.makedirs(class_dir, exist_ok=True)
     
@@ -469,30 +323,19 @@ def auto_capture_streamlit(roi, label, confidence, class_probs, color_valid, col
     filepath = os.path.join(class_dir, filename)
     
     cv2.imwrite(filepath, roi)
-    st.session_state.last_capture_time = current_time
-    st.session_state.total_captures += 1
     
-    capture_info = {
-        'time': datetime.now().strftime("%H:%M:%S"),
-        'label': label,
-        'confidence': confidence,
-        'filename': filename,
-        'filepath': filepath
-    }
-    st.session_state.capture_history.append(capture_info)
-    
-    return True, "✅ Captured!"
+    return filename, filepath
 
-# ---------- 10. STREAMLIT UI ----------
+# ---------- 9. MAIN UI ----------
 def main():
-    st.title("🔴 Dragon Fruit Scanner V4 - Streamlit WebRTC")
-    st.markdown("Real-time detection untuk buah naga merah dengan auto-capture")
+    st.title("🔴 Dragon Fruit Scanner")
+    st.markdown("📸 Ambil foto atau upload gambar buah naga untuk deteksi otomatis")
     
     if model is None:
         st.error("❌ Model tidak ditemukan! Pastikan file `knn_buah_naga_optimized.pkl` ada di folder yang sama.")
         st.stop()
     
-    # Sidebar - Settings
+    # Sidebar
     with st.sidebar:
         st.header("⚙️ Settings")
         
@@ -511,16 +354,7 @@ def main():
             max_value=95.0,
             value=st.session_state.confidence_threshold,
             step=5.0,
-            help="Minimum confidence untuk auto-capture"
-        )
-        
-        st.session_state.capture_cooldown = st.slider(
-            "Capture Cooldown (seconds)",
-            min_value=1.0,
-            max_value=10.0,
-            value=st.session_state.capture_cooldown,
-            step=0.5,
-            help="Jeda waktu antar capture"
+            help="Minimum confidence untuk dianggap valid"
         )
         
         st.markdown("---")
@@ -533,81 +367,148 @@ def main():
         st.markdown("---")
         
         st.subheader("📊 Statistics")
-        st.metric("Total Frames", st.session_state.frame_count)
-        st.metric("Total Captures", st.session_state.total_captures)
+        st.metric("Total Scans", st.session_state.total_scans)
+        st.metric("Total Saves", len(st.session_state.capture_history))
         
         if st.button("🔄 Reset Statistics"):
-            st.session_state.frame_count = 0
-            st.session_state.total_captures = 0
-            st.session_state.capture_history.clear()
+            st.session_state.total_scans = 0
+            st.session_state.capture_history = []
             st.rerun()
     
     # Main content
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.subheader("📹 Live Camera Feed")
+        st.subheader("📸 Input Image")
         
-        # WebRTC Configuration
-        RTC_CONFIGURATION = RTCConfiguration(
-            {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-        )
+        # Tabs for different input methods
+        tab1, tab2 = st.tabs(["📷 Camera", "📁 Upload File"])
         
-        # WebRTC Streamer
-        webrtc_ctx = webrtc_streamer(
-            key="dragon-fruit-detection",
-            video_processor_factory=DragonFruitDetector,
-            rtc_configuration=RTC_CONFIGURATION,
-            media_stream_constraints={"video": True, "audio": False},
-            async_processing=True,
-        )
+        image_source = None
         
-        st.markdown("""
-        **📝 Instructions:**
-        1. Klik **START** untuk memulai kamera
-        2. Arahkan kamera ke buah naga merah
-        3. Tunggu hingga deteksi valid (kotak hijau)
-        4. Auto-capture akan berjalan otomatis
-        5. Hasil capture akan muncul di panel kanan
-        """)
+        with tab1:
+            st.markdown("**Ambil foto langsung dari kamera:**")
+            camera_image = st.camera_input("Arahkan kamera ke buah naga")
+            if camera_image:
+                image_source = Image.open(camera_image)
+        
+        with tab2:
+            st.markdown("**Upload gambar dari file:**")
+            uploaded_file = st.file_uploader("Pilih file gambar", 
+                                            type=['jpg', 'jpeg', 'png'],
+                                            help="Format: JPG, JPEG, PNG")
+            if uploaded_file:
+                image_source = Image.open(uploaded_file)
+        
+        # Process image
+        if image_source:
+            st.session_state.total_scans += 1
+            
+            with st.spinner("🔍 Processing..."):
+                result = process_image(image_source)
+            
+            # Display result
+            st.image(result['annotated'], use_container_width=True)
+            
+            # Result details
+            st.markdown("---")
+            st.subheader("📊 Detection Results")
+            
+            col_a, col_b, col_c = st.columns(3)
+            
+            with col_a:
+                obj_status = "❌ SCREEN" if result['is_screen'] else ("✅ OK" if result['obj_present'] else "❌ FAIL")
+                st.metric("Object Detection", obj_status)
+                st.caption(f"Variance: {result['variance']:.0f}")
+            
+            with col_b:
+                color_status = "✅ OK" if result['color_valid'] else "❌ FAIL"
+                st.metric("Color Validation", color_status)
+                st.caption(f"Dragon Fruit: {result['color_percent']:.1f}%")
+            
+            with col_c:
+                if result['label']:
+                    conf_ok = result['confidence'] >= st.session_state.confidence_threshold
+                    pred_status = "✅ HIGH" if conf_ok else "⚠️ LOW"
+                    st.metric("Prediction", pred_status)
+                    st.caption(f"{result['label']}: {result['confidence']:.1f}%")
+                else:
+                    st.metric("Prediction", "N/A")
+            
+            # Detailed info
+            if result['label']:
+                st.markdown("---")
+                st.subheader("📈 Class Probabilities")
+                for cls, prob in sorted(result['class_probs'].items(), key=lambda x: x[1], reverse=True):
+                    st.progress(prob/100, text=f"{cls}: {prob:.1f}%")
+                
+                # Save button
+                if result['confidence'] >= st.session_state.confidence_threshold:
+                    if st.button("💾 Save This Capture", type="primary"):
+                        filename, filepath = save_capture(result['roi'], result['label'], result['confidence'])
+                        
+                        capture_info = {
+                            'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            'label': result['label'],
+                            'confidence': result['confidence'],
+                            'filename': filename,
+                            'filepath': filepath
+                        }
+                        st.session_state.capture_history.insert(0, capture_info)
+                        
+                        st.success(f"✅ Saved as: {filename}")
+                        st.rerun()
     
     with col2:
-        st.subheader("📸 Capture History")
+        st.subheader("📝 History")
         
-        if len(st.session_state.capture_history) > 0:
-            for i, cap in enumerate(reversed(list(st.session_state.capture_history))):
-                with st.expander(f"#{i+1} - {cap['time']} | {cap['label']} ({cap['confidence']:.1f}%)"):
+        if st.session_state.capture_history:
+            for i, cap in enumerate(st.session_state.capture_history[:5]):
+                with st.expander(f"#{i+1} - {cap['label']} ({cap['confidence']:.1f}%)"):
                     st.text(f"Time: {cap['time']}")
                     st.text(f"Label: {cap['label']}")
                     st.text(f"Confidence: {cap['confidence']:.1f}%")
                     st.text(f"File: {cap['filename']}")
                     
-                    # Show captured image
                     if os.path.exists(cap['filepath']):
                         img = cv2.imread(cap['filepath'])
                         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                         st.image(img_rgb, use_container_width=True)
+            
+            if len(st.session_state.capture_history) > 5:
+                st.info(f"Showing 5 of {len(st.session_state.capture_history)} saved captures")
         else:
-            st.info("Belum ada capture. Arahkan kamera ke buah naga merah.")
-        
-        if st.button("🗑️ Clear History"):
-            st.session_state.capture_history.clear()
-            st.rerun()
+            st.info("Belum ada capture yang disimpan")
     
-    # Footer info
+    # Footer
     st.markdown("---")
-    st.markdown("""
-    ### 🔍 Detection Layers:
-    1. **Object Detection**: Variance & edge density validation
-    2. **Color Detection**: Red color range (dark, bright, pink)
-    3. **KNN Prediction**: Maturity classification
-    
-    **Auto-Capture Conditions:**
-    - ✅ Valid object detected (not screen/display)
-    - ✅ Dragon fruit color ≥ {:.1f}%
-    - ✅ Confidence ≥ {:.1f}%
-    - ✅ Cooldown passed
-    """.format(MIN_DRAGON_FRUIT_AREA, st.session_state.confidence_threshold))
+    with st.expander("ℹ️ How It Works"):
+        st.markdown("""
+        ### 🔍 Detection Process:
+        
+        1. **Object Detection**
+           - Check variance & edge density
+           - Reject screens/displays
+        
+        2. **Color Validation**
+           - Detect red dragon fruit colors
+           - Support dark red, bright red, pink
+           - Also detect yellow/white varieties
+        
+        3. **KNN Classification**
+           - Predict maturity level
+           - Calculate confidence score
+        
+        4. **Auto-Save**
+           - Save captures with high confidence
+           - Organize by classification
+        
+        **Tips:**
+        - ✅ Use good lighting
+        - ✅ Center the fruit in frame
+        - ✅ Avoid shadows and reflections
+        - ✅ Keep camera steady
+        """)
 
 if __name__ == "__main__":
     main()
