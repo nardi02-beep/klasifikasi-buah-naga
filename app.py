@@ -54,9 +54,9 @@ model, classes = load_model()
 # ---------- 2. CONFIGURATION ----------
 TARGET_SIZE = (800, 800)
 MIN_DRAGON_FRUIT_AREA = 12.0
-MIN_VARIANCE = 150
-MIN_EDGE_DENSITY = 0.015
-MAX_VARIANCE = 2000
+MIN_VARIANCE = 100               # Lower threshold - real fruits OK
+MIN_EDGE_DENSITY = 0.010         # More lenient
+MAX_VARIANCE = 8000              # Much higher - reject only obvious screens
 
 BASE_CAPTURE_DIR = "auto_captures"
 os.makedirs(BASE_CAPTURE_DIR, exist_ok=True)
@@ -68,6 +68,8 @@ if 'confidence_threshold' not in st.session_state:
     st.session_state.confidence_threshold = 65.0
 if 'total_scans' not in st.session_state:
     st.session_state.total_scans = 0
+if 'enable_screen_rejection' not in st.session_state:
+    st.session_state.enable_screen_rejection = False
 
 # ---------- 3. HELPER FUNCTIONS ----------
 def bgr_to_hsi(bgr_image):
@@ -203,16 +205,21 @@ def is_dragon_fruit_color(roi):
 
 # ---------- 6. OBJECT DETECTION ----------
 def is_object_present(roi):
-    """Object detection with screen rejection"""
+    """Object detection with optional screen rejection"""
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     variance = np.var(gray)
     
     edges = cv2.Canny(gray, 50, 150)
     edge_density = np.sum(edges > 0) / edges.size
     
-    has_variance_ok = MIN_VARIANCE < variance < MAX_VARIANCE
+    # Check if it's a screen (only if enabled)
+    is_screen = False
+    if st.session_state.enable_screen_rejection:
+        is_screen = variance > MAX_VARIANCE
+    
+    # More lenient validation - focus on minimum requirements
+    has_variance_ok = variance > MIN_VARIANCE
     has_edges_ok = edge_density > MIN_EDGE_DENSITY
-    is_screen = variance > MAX_VARIANCE
     
     is_valid_object = has_variance_ok and has_edges_ok and not is_screen
     
@@ -359,9 +366,24 @@ def main():
         
         st.markdown("---")
         
+        st.subheader("Detection Settings")
+        
+        st.session_state.enable_screen_rejection = st.checkbox(
+            "Enable Screen/Display Rejection",
+            value=st.session_state.enable_screen_rejection,
+            help="Reject images with very high variance (screens/displays). Disable if real fruits are rejected."
+        )
+        
+        if not st.session_state.enable_screen_rejection:
+            st.info("ℹ️ Screen rejection disabled - all objects will be processed")
+        
+        st.markdown("---")
+        
         st.subheader("Detection Info")
         st.text(f"Min Color Area: {MIN_DRAGON_FRUIT_AREA}%")
-        st.text(f"Variance Range: {MIN_VARIANCE}-{MAX_VARIANCE}")
+        st.text(f"Min Variance: >{MIN_VARIANCE}")
+        if st.session_state.enable_screen_rejection:
+            st.text(f"Max Variance: <{MAX_VARIANCE}")
         st.text(f"Edge Density: >{MIN_EDGE_DENSITY}")
         
         st.markdown("---")
@@ -419,7 +441,15 @@ def main():
             with col_a:
                 obj_status = "❌ SCREEN" if result['is_screen'] else ("✅ OK" if result['obj_present'] else "❌ FAIL")
                 st.metric("Object Detection", obj_status)
-                st.caption(f"Variance: {result['variance']:.0f}")
+                
+                # Show detailed variance info
+                var_info = f"Variance: {result['variance']:.0f}"
+                if st.session_state.enable_screen_rejection and result['is_screen']:
+                    var_info += f" (>{MAX_VARIANCE})"
+                elif not result['obj_present'] and result['variance'] <= MIN_VARIANCE:
+                    var_info += f" (too low)"
+                st.caption(var_info)
+                st.caption(f"Edges: {result['edge_density']:.4f}")
             
             with col_b:
                 color_status = "✅ OK" if result['color_valid'] else "❌ FAIL"
@@ -434,6 +464,34 @@ def main():
                     st.caption(f"{result['label']}: {result['confidence']:.1f}%")
                 else:
                     st.metric("Prediction", "N/A")
+            
+            # Debug info expander
+            with st.expander("🔍 Debug Information"):
+                st.markdown("**Object Detection Details:**")
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    st.metric("Variance", f"{result['variance']:.2f}")
+                    st.caption(f"Min: {MIN_VARIANCE} | Max: {MAX_VARIANCE if st.session_state.enable_screen_rejection else 'N/A'}")
+                with col_d2:
+                    st.metric("Edge Density", f"{result['edge_density']:.4f}")
+                    st.caption(f"Min: {MIN_EDGE_DENSITY}")
+                
+                st.markdown("**Color Detection Details:**")
+                col_d3, col_d4 = st.columns(2)
+                with col_d3:
+                    st.write(f"🔴 Dark Red: {result['color_info']['dark_red']:.1f}%")
+                    st.write(f"🔴 Bright Red: {result['color_info']['bright_red']:.1f}%")
+                    st.write(f"🌸 Pink: {result['color_info']['pink']:.1f}%")
+                with col_d4:
+                    st.write(f"🟡 Yellow: {result['color_info']['yellow']:.1f}%")
+                    st.write(f"🟢 Green: {result['color_info']['green']:.1f}%")
+                    st.write(f"📊 **Total: {result['color_info']['total']:.1f}%**")
+                
+                st.markdown("**Validation Status:**")
+                st.write(f"✓ Object Present: {'✅ Yes' if result['obj_present'] else '❌ No'}")
+                st.write(f"✓ Color Valid: {'✅ Yes' if result['color_valid'] else '❌ No'} ({result['color_percent']:.1f}% >= {MIN_DRAGON_FRUIT_AREA}%)")
+                st.write(f"✓ Screen Rejection: {'⚠️ Enabled' if st.session_state.enable_screen_rejection else '✅ Disabled'}")
+                st.write(f"✓ Is Screen: {'❌ Yes' if result['is_screen'] else '✅ No'}")
             
             # Detailed info
             if result['label']:
@@ -482,29 +540,51 @@ def main():
     
     # Footer
     st.markdown("---")
-    with st.expander("ℹ️ How It Works"):
+    with st.expander("ℹ️ How It Works & Troubleshooting"):
         st.markdown("""
         ### 🔍 Detection Process:
         
         1. **Object Detection**
-           - Check variance & edge density
-           - Reject screens/displays
+           - Check variance (texture complexity)
+           - Check edge density (object presence)
+           - Optional: Reject screens/displays (if enabled)
         
         2. **Color Validation**
            - Detect red dragon fruit colors
            - Support dark red, bright red, pink
            - Also detect yellow/white varieties
+           - Minimum 12% dragon fruit color required
         
         3. **KNN Classification**
            - Predict maturity level
            - Calculate confidence score
+           - Show probability for each class
         
-        4. **Auto-Save**
+        4. **Save Feature**
            - Save captures with high confidence
            - Organize by classification
+           - Auto-filename with timestamp
+        
+        ### 🛠️ Troubleshooting:
+        
+        **"SCREEN/DISPLAY - REJECTED":**
+        - ✅ **Disable "Screen/Display Rejection"** in sidebar
+        - This happens when variance is very high (>8000)
+        - Real dragon fruits with detailed scales may trigger this
+        - Disable this setting if you're scanning real fruits
+        
+        **"NO VALID OBJECT":**
+        - ✅ Ensure good lighting
+        - ✅ Image not too blurry or uniform
+        - ✅ Fruit visible in center of frame
+        
+        **"NOT DRAGON FRUIT":**
+        - ✅ Check if it's actually dragon fruit
+        - ✅ Color percentage shows detection (<12% = rejected)
+        - ✅ Works best with red/pink/yellow dragon fruits
         
         **Tips:**
-        - ✅ Use good lighting
+        - ✅ Use good, even lighting
         - ✅ Center the fruit in frame
         - ✅ Avoid shadows and reflections
         - ✅ Keep camera steady
