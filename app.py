@@ -19,7 +19,7 @@ from collections import deque
 import time
 import os
 from datetime import datetime
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 import av
 
 # ---------- PAGE CONFIG ----------
@@ -292,15 +292,15 @@ def get_color_by_status(color_valid, confidence, is_screen):
     else:
         return (0, 255, 255)      # Yellow - low confidence
 
-# ---------- 8. VIDEO TRANSFORMER CLASS ----------
-class DragonFruitDetector(VideoTransformerBase):
+# ---------- 8. VIDEO PROCESSOR CLASS ----------
+class DragonFruitDetector(VideoProcessorBase):
     """Real-time video processor for Dragon Fruit Detection"""
     
     def __init__(self):
         self.prev_frame = None
         self.frame_count = 0
         
-    def transform(self, frame):
+    def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         
         st.session_state.frame_count += 1
@@ -556,7 +556,7 @@ def main():
         # WebRTC Streamer
         webrtc_ctx = webrtc_streamer(
             key="dragon-fruit-detection",
-            video_transformer_factory=DragonFruitDetector,
+            video_processor_factory=DragonFruitDetector,
             rtc_configuration=RTC_CONFIGURATION,
             media_stream_constraints={"video": True, "audio": False},
             async_processing=True,
